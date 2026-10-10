@@ -47,6 +47,13 @@ const attributionShape = {
   utmContent: optText(200),
 };
 
+const levelPath = z
+  .object({ l1: objectIdString.nullable().optional(), l2: objectIdString.nullable().optional(), l3: objectIdString.nullable().optional() })
+  .openapi({ description: 'Primary (l1) → Secondary (l2) → Tertiary (l3) value ids; each must be a child of the level above' });
+export const attributionPathSchema = z
+  .object({ source: levelPath.optional(), medium: levelPath.optional(), campaign: levelPath.optional() })
+  .openapi('AttributionPath');
+
 export const DUPLICATE_ACTIONS = ['keep_existing', 'create_separate', 'mark_duplicate'] as const;
 
 export const createLeadBody = z
@@ -57,10 +64,14 @@ export const createLeadBody = z
     assignedCounsellor: objectIdString.optional(),
     assignedManager: objectIdString.optional(),
     notes: optText(5000),
+    attribution: attributionPathSchema.optional().openapi({
+      description: 'Hierarchical Source / Medium / Campaign attribution of this enquiry. Invalid parent/child combinations are rejected.',
+    }),
     duplicateAction: z.enum(DUPLICATE_ACTIONS).optional().openapi({
       description:
-        'How to resolve a DUPLICATE_LEAD conflict: keep_existing (record this enquiry on the existing lead), ' +
-        'create_separate, or mark_duplicate (create it as a duplicate of the existing lead). The last two need lead.merge.',
+        'How to resolve a DUPLICATE_LEAD conflict (email / WhatsApp matches): keep_existing (record this enquiry on the existing lead), ' +
+        'create_separate, or mark_duplicate (create it as a duplicate of the existing lead). The last two need lead.merge. ' +
+        'A phone number that already belongs to an active lead is always recorded as a re-inquiry of that lead.',
     }),
     duplicateOfId: objectIdString.optional().openapi({ description: 'Existing lead to use for keep_existing / mark_duplicate' }),
   })
@@ -92,7 +103,7 @@ export const updateLeadBody = z
     branchId: objectIdString.nullable().optional(),
     campaign: nullableText(200),
     notes: nullableText(5000),
-    allowDuplicate: z.boolean().optional().openapi({ description: 'Save even if the new phone/email matches another lead' }),
+    allowDuplicate: z.boolean().optional().openapi({ description: 'Save even if the new email / WhatsApp number matches another lead (never for a phone number another active lead uses)' }),
   })
   .openapi('UpdateLeadRequest');
 
@@ -122,9 +133,14 @@ export const checkDuplicatesBody = z
   .openapi('CheckDuplicatesRequest');
 
 const csv = z.string().transform((v) => v.split(',').map((s) => s.trim()).filter(Boolean));
+const csvIds = z
+  .string()
+  .transform((v) => v.split(',').map((s) => s.trim()).filter(Boolean))
+  .pipe(z.array(objectIdString).min(1).max(50))
+  .openapi({ type: 'string', description: 'Comma-separated hierarchy value ids' });
 
 export const leadListQuery = paginationQuery.extend({
-  sortBy: sortQuery(['createdAt', 'updatedAt', 'fullName', 'nextFollowUpAt', 'leadNumber'], 'createdAt'),
+  sortBy: sortQuery(['createdAt', 'updatedAt', 'fullName', 'nextFollowUpAt', 'leadNumber', 'lastInquiryAt', 'inquiryCount'], 'createdAt'),
   dateFrom: z.coerce.date().optional(),
   dateTo: z.coerce.date().optional(),
   branchId: objectIdString.optional(),
@@ -140,6 +156,45 @@ export const leadListQuery = paginationQuery.extend({
   followUp: z.enum(['overdue', 'today', 'upcoming', 'none']).optional(),
   includeClosed: z.enum(['true', 'false']).transform((v) => v === 'true').default(true),
   filter: filterQueryParam.optional(),
+
+  // Re-inquiry filters (based on inquiry history, not a manual badge).
+  inquiryType: z.enum(['all', 'first_time', 'reinquiry']).optional().openapi({ description: 'first_time: one inquiry; reinquiry: two or more' }),
+  inquiryCountMin: z.coerce.number().int().min(1).max(1000).optional(),
+  inquiryCountMax: z.coerce.number().int().min(1).max(1000).optional(),
+  firstInquiryFrom: z.coerce.date().optional(),
+  firstInquiryTo: z.coerce.date().optional(),
+  lastInquiryFrom: z.coerce.date().optional(),
+  lastInquiryTo: z.coerce.date().optional(),
+  inquiryFrom: z.coerce.date().optional().openapi({ description: 'Leads with any inquiry (first or repeat) in this range' }),
+  inquiryTo: z.coerce.date().optional(),
+  inquiryChannel: csv.optional().openapi({ description: 'Inquiry channel(s): meta_lead_ad, website_form, manual, import, event, api, …' }),
+  inquiryStatus: z.enum(['new', 'pending_review', 'handled']).optional().openapi({ description: 'Leads with a re-inquiry in this status (pending_review = re-inquiry queue)' }),
+
+  // Hierarchical attribution, matched against the chosen attribution context.
+  attributionMode: z.enum(['original', 'latest', 'any']).default('original').openapi({
+    description: 'original: first-touch attribution · latest: most recent inquiry · any: any inquiry in the history',
+  }),
+  sourcePrimary: csvIds.optional(),
+  sourceSecondary: csvIds.optional(),
+  sourceTertiary: csvIds.optional(),
+  mediumPrimary: csvIds.optional(),
+  mediumSecondary: csvIds.optional(),
+  mediumTertiary: csvIds.optional(),
+  campaignPrimary: csvIds.optional(),
+  campaignSecondary: csvIds.optional(),
+  campaignTertiary: csvIds.optional(),
+
+  // Raw tracking / integration identifiers (same attribution context). UTM values match case-insensitively.
+  utmSource: optText(200),
+  utmMedium: optText(200),
+  utmCampaign: optText(200),
+  utmTerm: optText(200),
+  utmContent: optText(200),
+  provider: optText(50),
+  campaignExternalId: optText(100),
+  adExternalId: optText(100),
+  formExternalId: optText(100),
+  landingPage: optText(500).openapi({ description: 'Landing page URL prefix' }),
 });
 export type LeadListQuery = z.infer<typeof leadListQuery>;
 
@@ -179,6 +234,7 @@ export const duplicateMatchDto = z
     leadNumber: z.number(),
     fullName: z.string(),
     matchedOn: z.array(z.enum(['phone', 'whatsappNumber', 'email'])),
+    samePhone: z.boolean().openapi({ description: 'Creating a lead with this phone records a re-inquiry on this lead instead' }),
     leadStage: z.string(),
     leadStatus: z.string(),
     originalSource: z.string(),

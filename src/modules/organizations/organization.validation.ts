@@ -1,4 +1,5 @@
 import { z } from '../../docs/zod.js';
+import { REINQUIRY_POLICIES } from '../leads/inquiry.model.js';
 import { passwordSchema } from '../auth/auth.validation.js';
 import { paginationQuery, sortQuery } from '../../utils/pagination.js';
 
@@ -23,6 +24,11 @@ const settingsSchema = z.object({
     .regex(/^\d{1,4}$/, 'Digits only, e.g. 91')
     .optional(),
   dateFormat: z.string().max(20).optional(),
+  reinquiryPolicy: z.enum(REINQUIRY_POLICIES).optional().openapi({
+    description:
+      'When a known phone number enquires again: keep_owner (notify the owner), follow_up_owner (also create a follow-up), ' +
+      'review_queue (flag for review), reassign_if_unavailable (assign to the incoming default only if the owner is missing or inactive).',
+  }),
 });
 
 const profileFields = {
@@ -89,6 +95,7 @@ export const organizationDto = z
       currency: z.string(),
       defaultCountryCode: z.string(),
       dateFormat: z.string(),
+      reinquiryPolicy: z.enum(REINQUIRY_POLICIES).optional(),
     }),
     createdAt: z.string(),
     updatedAt: z.string(),

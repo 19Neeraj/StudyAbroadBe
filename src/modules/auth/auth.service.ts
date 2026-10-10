@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { env } from '../../config/env.js';
-import { ALL_PERMISSIONS, PLATFORM_MANAGE } from '../../constants/permissions.js';
+import { FULL_ACCESS_PERMISSIONS, PLATFORM_MANAGE } from '../../constants/permissions.js';
 import { sendEmailSafe } from '../../integrations/email/index.js';
 import type { RequestMeta, ServiceContext } from '../../types/auth.js';
 import { ApiError } from '../../utils/ApiError.js';
@@ -16,6 +16,8 @@ import { RoleModel } from '../roles/role.model.js';
 import { UserModel } from '../users/user.model.js';
 import { SessionModel } from './session.model.js';
 import { accessTokenTtlSeconds, signAccessToken } from './token.service.js';
+import { effectivePolicy, getPlatformPolicy, requirementFor } from '../security/policy.js';
+import { issueChallenge } from '../security/twoFactor.service.js';
 
 const MAX_SESSIONS_PER_USER = 10;
 const KEEP_PREVIOUS_HASHES = 5;
@@ -35,7 +37,7 @@ function refreshExpiry(): Date {
   return new Date(Date.now() + env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
 }
 
-async function createSession(
+export async function createSession(
   user: { _id: Types.ObjectId; organizationId: Types.ObjectId },
   client: { platform: 'web' | 'android' | 'ios' | 'other'; deviceName?: string | undefined },
   meta: RequestMeta,
@@ -82,12 +84,13 @@ export async function login(
     password: string;
     platform: 'web' | 'android' | 'ios' | 'other';
     deviceName?: string | undefined;
+    rememberMe?: boolean | undefined;
   },
   meta: RequestMeta,
 ) {
   const user = await UserModel.findOne({ email: normalizeEmail(input.email) })
     .setOptions({ skipTenantGuard: true })
-    .select('+passwordHash organizationId isActive')
+    .select('+passwordHash organizationId isActive twoFactor.enabled createdAt')
     .lean();
 
   if (!user) {
@@ -104,10 +107,34 @@ export async function login(
   if (!user.isActive)
     throw new ApiError(403, 'Your account has been deactivated', [], 'ACCOUNT_INACTIVE');
 
-  const org = await OrganizationModel.findById(user.organizationId).select('isActive').lean();
+  const org = await OrganizationModel.findById(user.organizationId).select('isActive security').lean();
   if (!org?.isActive)
     throw new ApiError(403, 'Your organization is inactive', [], 'ORGANIZATION_INACTIVE');
 
+  // Second factor: a correct password alone only yields a short-lived, single-use challenge.
+  const requirement = requirementFor(effectivePolicy(await getPlatformPolicy(), org.security), { enabled: user.twoFactor?.enabled, createdAt: user.createdAt });
+  if (requirement.verify || requirement.enrollNow) {
+    const purpose = requirement.verify ? 'verify' : 'enroll';
+    const challenge = await issueChallenge(user, purpose, input);
+    await recordAudit(
+      { organizationId: user.organizationId, userId: user._id, meta },
+      { entityType: 'user', entityId: user._id, action: 'auth.2fa_challenge_issued', metadata: { purpose, platform: input.platform } },
+    );
+    return {
+      status: purpose === 'verify' ? ('two_factor_required' as const) : ('two_factor_enrollment_required' as const),
+      ...challenge,
+      methods: purpose === 'verify' ? ['totp', 'recovery_code'] : [],
+    };
+  }
+  return { status: 'authenticated' as const, ...(await startSession(user, input, meta)) };
+}
+
+/** Creates the session after every factor passed (password, and TOTP / recovery code / enrollment when required). */
+export async function startSession(
+  user: { _id: Types.ObjectId; organizationId: Types.ObjectId },
+  input: { platform: 'web' | 'android' | 'ios' | 'other'; deviceName?: string | undefined },
+  meta: RequestMeta,
+) {
   const tokens = await createSession(user, input, meta);
   await UserModel.updateOne(
     { _id: user._id, organizationId: user.organizationId },
@@ -226,7 +253,7 @@ export async function revokeSessions(
 
 export async function getCurrentUser(userId: Types.ObjectId, organizationId: Types.ObjectId) {
   const user = await UserModel.findOne({ _id: userId, organizationId })
-    .select('firstName lastName fullName email phone designation avatarUrl roleId branchIds')
+    .select('firstName lastName fullName email phone designation avatarUrl roleId branchIds twoFactor.enabled createdAt')
     .lean();
   if (!user) throw ApiError.notFound('User');
 
@@ -234,14 +261,15 @@ export async function getCurrentUser(userId: Types.ObjectId, organizationId: Typ
     RoleModel.findOne({ _id: user.roleId, organizationId })
       .select('key name dataScope permissions isSuperAdmin')
       .lean(),
-    OrganizationModel.findById(organizationId).select('name slug settings').lean(),
+    OrganizationModel.findById(organizationId).select('name slug settings isDemo security').lean(),
     BranchModel.find({ organizationId, _id: { $in: user.branchIds }, isActive: true })
       .select('name code')
       .lean(),
   ]);
   if (!role || !org) throw ApiError.notFound('User');
+  const twoFactorReq = requirementFor(effectivePolicy(await getPlatformPolicy(), org.security), { enabled: user.twoFactor?.enabled, createdAt: user.createdAt });
 
-  const permissions = role.isSuperAdmin ? [...ALL_PERMISSIONS, PLATFORM_MANAGE] : role.permissions;
+  const permissions = role.isSuperAdmin ? [...FULL_ACCESS_PERMISSIONS, PLATFORM_MANAGE] : role.permissions;
   return {
     id: user._id.toString(),
     firstName: user.firstName,
@@ -261,6 +289,13 @@ export async function getCurrentUser(userId: Types.ObjectId, organizationId: Typ
     role: { id: role._id.toString(), key: role.key, name: role.name, dataScope: role.dataScope },
     permissions,
     branches: branches.map((b) => ({ id: b._id.toString(), name: b.name, code: b.code })),
+    isDemo: !!org.isDemo,
+    twoFactor: {
+      enabled: !!user.twoFactor?.enabled,
+      required: twoFactorReq.policy.mode === 'mandatory',
+      enrollmentRequiredBy: twoFactorReq.enrollBy,
+      enrollmentOverdue: twoFactorReq.enrollNow,
+    },
   };
 }
 

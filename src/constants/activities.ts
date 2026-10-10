@@ -27,6 +27,8 @@ export const SYSTEM_ACTIVITY_TYPES = [
   'visa_updated',
   'document_uploaded',
   'document_reviewed',
+  'event_registered',
+  'event_attended',
 ] as const;
 
 /** Types a user can log by hand (communication + notes). */

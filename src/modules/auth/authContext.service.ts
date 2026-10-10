@@ -1,5 +1,6 @@
 import { Types } from 'mongoose';
-import { ALL_PERMISSIONS, PLATFORM_MANAGE } from '../../constants/permissions.js';
+import { env } from '../../config/env.js';
+import { FULL_ACCESS_PERMISSIONS, PLATFORM_MANAGE } from '../../constants/permissions.js';
 import type { DataScope } from '../../constants/roles.js';
 import type { AuthContext } from '../../types/auth.js';
 import { ApiError } from '../../utils/ApiError.js';
@@ -8,8 +9,9 @@ import { RoleModel } from '../roles/role.model.js';
 import { UserModel } from '../users/user.model.js';
 import { SessionModel } from './session.model.js';
 import { verifyAccessToken } from './token.service.js';
+import { effectivePolicy, getPlatformPolicy, requirementFor } from '../security/policy.js';
 
-const SUPER_ADMIN_PERMISSIONS: ReadonlySet<string> = new Set([...ALL_PERMISSIONS, PLATFORM_MANAGE]);
+const SUPER_ADMIN_PERMISSIONS: ReadonlySet<string> = new Set([...FULL_ACCESS_PERMISSIONS, PLATFORM_MANAGE]);
 
 /**
  * Turns an access token into a trusted AuthContext by re-reading the user, role and organization,
@@ -24,9 +26,9 @@ export async function resolveAuthContext(token: string): Promise<AuthContext> {
 
   const [user, org, session] = await Promise.all([
     UserModel.findOne({ _id: payload.sub, organizationId })
-      .select('roleId branchIds isActive passwordChangedAt')
+      .select('roleId branchIds isActive passwordChangedAt twoFactor.enabled createdAt')
       .lean(),
-    OrganizationModel.findById(organizationId).select('isActive').lean(),
+    OrganizationModel.findById(organizationId).select('isActive isDemo security').lean(),
     // Revoked sessions (sign-out, remote device sign-out, password reset) stop working immediately.
     Types.ObjectId.isValid(payload.sid) ? SessionModel.findById(payload.sid).select('revokedAt').lean() : null,
   ]);
@@ -53,5 +55,9 @@ export async function resolveAuthContext(token: string): Promise<AuthContext> {
     dataScope: role.dataScope as DataScope,
     branchIds: user.branchIds,
     isSuperAdmin: role.isSuperAdmin,
+    assignedOnly: !role.isSuperAdmin && role.permissions.includes('lead.viewAssignedOnly'),
+    isDemo: !!org.isDemo && env.DEMO_READ_ONLY,
+    // Re-evaluated on every request, so a session that predates a mandatory policy can't skip enrollment.
+    twoFactorEnrollmentRequired: requirementFor(effectivePolicy(await getPlatformPolicy(), org.security), { enabled: user.twoFactor?.enabled, createdAt: user.createdAt }).enrollNow,
   };
 }

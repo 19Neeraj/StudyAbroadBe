@@ -1,9 +1,12 @@
 import { Schema, model, type InferSchemaType, type Types } from 'mongoose';
 import { tenantField, tenantPlugin } from '../../database/plugins/tenant.plugin.js';
 
-export const INTEGRATION_KINDS = ['calling', 'whatsapp', 'email', 'transcription', 'ai'] as const;
+export const INTEGRATION_KINDS = ['calling', 'whatsapp', 'email', 'transcription', 'ai', 'meta_ads', 'google_ads', 'google_analytics', 'website', 'payment'] as const;
 export type IntegrationKind = (typeof INTEGRATION_KINDS)[number];
-export const INTEGRATION_STATUSES = ['connected', 'disconnected', 'error', 'requires_reauthorization'] as const;
+export const INTEGRATION_STATUSES = ['connected', 'disconnected', 'error', 'requires_reauthorization', 'syncing'] as const;
+/** Kinds managed from the Integrations & Marketing hub (ads connectors). */
+export const ADS_KINDS = ['meta_ads', 'google_ads'] as const;
+export type AdsKind = (typeof ADS_KINDS)[number];
 
 /**
  * One provider connection per organization and kind (spec: Integration Hub). Non-secret settings
@@ -22,6 +25,15 @@ const integrationSchema = new Schema(
     webhookToken: { type: String, required: true, select: false },
     lastEventAt: { type: Date },
     lastError: { type: String },
+    /** Ads connectors: what the token can do (checked on connect and on every sync). */
+    grantedScopes: { type: [String], default: undefined },
+    missingScopes: { type: [String], default: undefined },
+    tokenExpiresAt: { type: Date },
+    connectedAccountName: { type: String },
+    /** The admin who connected it; imports run with this user's permissions. */
+    connectedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    /** Per sync type: { lastAttemptAt, lastSuccessAt, lastError }. */
+    syncState: { type: Schema.Types.Mixed, default: {} },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true, minimize: false },

@@ -68,3 +68,29 @@ export const refreshLimiter = rateLimit({
   },
   handler: (_req, _res, next) => next(ApiError.tooManyRequests()),
 });
+
+/**
+ * Second-factor attempts: per IP + challenge (or signed-in session). Each challenge also allows
+ * only 5 tries before the user must start again from the password.
+ */
+export const twoFactorLimiter = rateLimit({
+  ...common,
+  windowMs: 15 * 60_000,
+  limit: env.AUTH_RATE_LIMIT_MAX,
+  keyGenerator: (req) => {
+    const body = req.body as { challengeToken?: unknown } | undefined;
+    const challenge = typeof body?.challengeToken === 'string' ? body.challengeToken : '';
+    const bearer = extractBearer(req.headers.authorization) ?? '';
+    return `2fa:${ipKey(req)}:${fingerprint(challenge || bearer || '-')}`;
+  },
+  handler: (_req, _res, next) => next(ApiError.tooManyRequests('Too many attempts, please try again later')),
+});
+
+/** Public demo sign-in: generous, but not a free-for-all. */
+export const demoLimiter = rateLimit({
+  ...common,
+  windowMs: 15 * 60_000,
+  limit: 30,
+  keyGenerator: ipKey,
+  handler: (_req, _res, next) => next(ApiError.tooManyRequests()),
+});

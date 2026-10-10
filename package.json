@@ -10,7 +10,11 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:indexes": "tsx src/database/sync-indexes.ts"
+    "db:indexes": "tsx src/database/sync-indexes.ts",
+    "seed:demo": "tsx src/database/seed.ts --demo-data",
+    "seed:demo:clean": "tsx src/database/demo-clean.ts",
+    "leads:phone-duplicates": "tsx src/database/phone-duplicates.ts",
+    "db:counts": "tsx src/database/collection-counts.ts"
   },
   "description": "Study Abroad CRM API",
   "dependencies": {
@@ -23,6 +27,7 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^18.0.6",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.1",
     "helmet": "^8.3.0",
@@ -31,8 +36,10 @@
     "mongoose": "^9.11.1",
     "multer": "^2.4.0",
     "nodemailer": "^10.0.16",
+    "otplib": "^13.5.0",
     "pino": "^10.4.0",
     "pino-http": "^11.0.0",
+    "qrcode": "^1.5.4",
     "socket.io": "^4.8.4",
     "swagger-ui-express": "^5.0.1",
     "zod": "^4.6.5"
@@ -47,6 +54,7 @@
     "@types/multer": "^2.3.0",
     "@types/node": "^26.6.4",
     "@types/nodemailer": "^8.0.2",
+    "@types/qrcode": "^1.5.6",
     "@types/supertest": "^7.2.1",
     "@types/swagger-ui-express": "^4.1.8",
     "eslint": "^9.39.5",

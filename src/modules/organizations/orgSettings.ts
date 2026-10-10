@@ -1,4 +1,5 @@
 import type { Types } from 'mongoose';
+import type { ReinquiryPolicy } from '../leads/inquiry.model.js';
 import { OrganizationModel } from './organization.model.js';
 
 export interface OrgSettings {
@@ -6,9 +7,11 @@ export interface OrgSettings {
   currency: string;
   defaultCountryCode: string;
   dateFormat: string;
+  /** What happens to ownership when a known contact enquires again (see docs/LEAD_INTEGRITY.md). */
+  reinquiryPolicy: ReinquiryPolicy;
 }
 
-const DEFAULTS: OrgSettings = { timezone: 'Asia/Kolkata', currency: 'INR', defaultCountryCode: '91', dateFormat: 'DD MMM YYYY' };
+const DEFAULTS: OrgSettings = { timezone: 'Asia/Kolkata', currency: 'INR', defaultCountryCode: '91', dateFormat: 'DD MMM YYYY', reinquiryPolicy: 'keep_owner' };
 const TTL_MS = 60_000;
 const cache = new Map<string, { value: OrgSettings; expires: number }>();
 

@@ -4,7 +4,11 @@ import { z } from '../../docs/zod.js';
 import { callingProvider, CALLING_PROVIDERS } from '../../integrations/calling/index.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { createModuleRouter } from '../../utils/router.js';
+import { adsProvider, adsProviderKeys } from '../../integrations/ads/index.js';
+import { enqueue } from '../../jobs/queue.js';
 import { applyProviderEvent } from '../calls/call.service.js';
+import { IntegrationModel } from '../integrations/integration.model.js';
+import { ExternalLeadReferenceModel } from '../marketing/externalLeadReference.model.js';
 import { credentialsOf, integrationByWebhookToken, markIntegrationEvent } from '../integrations/integration.service.js';
 import { WebhookEventModel } from './webhookEvent.model.js';
 
@@ -60,6 +64,75 @@ m.publicRoute({
       await markIntegrationEvent(integration.organizationId, 'calling', (err as Error).message);
       throw err;
     }
+    return { data: { received: events.length, results }, message: 'Accepted' };
+  },
+});
+
+/** Ads webhooks resolve the organization from the secret token in the URL (one URL per connection). */
+async function adsIntegrationByToken(provider: string, token: string) {
+  if (!adsProviderKeys().includes(provider) || !token || token.length < 20) return null;
+  return IntegrationModel.findOne({ webhookToken: token, provider, kind: { $in: ['meta_ads', 'google_ads'] }, enabled: true })
+    .select('+secrets +webhookToken')
+    .setOptions({ skipTenantGuard: true })
+    .lean();
+}
+
+const adsParams = z.object({ provider: z.string().min(1).max(40), token: z.string().min(20).max(100) });
+
+m.publicRoute({
+  method: 'get',
+  path: '/ads/:provider/:token',
+  summary: 'Ads webhook subscription handshake (Meta: hub.mode / hub.verify_token / hub.challenge)',
+  params: adsParams,
+  handler: async ({ req, res, params }) => {
+    const integration = await adsIntegrationByToken(params.provider, params.token);
+    if (!integration) throw ApiError.notFound('Webhook');
+    // Read hub.* from the raw URL: the request sanitizer strips dotted keys from req.query (NoSQL-injection guard).
+    const query = Object.fromEntries(new URL(req.originalUrl, 'http://local').searchParams);
+    const challenge = adsProvider(params.provider).webhookChallenge?.(query, credentialsOf(integration));
+    if (challenge === null || challenge === undefined) throw ApiError.forbidden('Verification token does not match');
+    // The provider expects the bare challenge string, not the JSON envelope.
+    res.status(200).type('text/plain').send(challenge);
+  },
+});
+
+m.publicRoute({
+  method: 'post',
+  path: '/ads/:provider/:token',
+  summary: 'Ads lead webhook (Meta leadgen)',
+  description:
+    'Signature-checked (Meta: X-Hub-Signature-256 with the app secret), recorded once per event, then answered quickly; ' +
+    'lead details are fetched and imported in the background queue. Duplicate deliveries have no effect.',
+  params: adsParams,
+  handler: async ({ req, params }) => {
+    const integration = await adsIntegrationByToken(params.provider, params.token);
+    if (!integration) throw ApiError.notFound('Webhook');
+    const provider = adsProvider(params.provider);
+    try {
+      provider.verifyWebhook?.(req, credentialsOf(integration));
+    } catch {
+      logger.warn({ provider: params.provider }, 'Rejected ads webhook with invalid signature');
+      throw ApiError.unauthorized('Invalid webhook signature');
+    }
+    const orgId = integration.organizationId;
+    const events = provider.parseWebhook?.(req) ?? [];
+    const results: string[] = [];
+    for (const e of events) {
+      results.push(
+        await processOnce(orgId, integration.kind, params.provider, e.eventKey, e.raw, async () => {
+          if (e.kind !== 'lead' || !e.externalLeadId) return 'ignored';
+          // Record first so the lead is visible (and never lost) even before the job runs.
+          await ExternalLeadReferenceModel.updateOne(
+            { organizationId: orgId, provider: params.provider, externalLeadId: e.externalLeadId },
+            { $setOnInsert: { organizationId: orgId, provider: params.provider, externalLeadId: e.externalLeadId, status: 'received', receivedVia: 'webhook', pageExternalId: e.pageExternalId, formExternalId: e.formExternalId, adExternalId: e.adExternalId } },
+            { upsert: true },
+          );
+          await enqueue('ads.processLead', { organizationId: orgId.toString(), provider: params.provider, externalLeadId: e.externalLeadId, via: 'webhook' }, { jobId: `ads.lead:${params.provider}:${e.externalLeadId}` });
+          return 'queued';
+        }),
+      );
+    }
+    await IntegrationModel.updateOne({ organizationId: orgId, _id: integration._id }, { lastEventAt: new Date() });
     return { data: { received: events.length, results }, message: 'Accepted' };
   },
 });

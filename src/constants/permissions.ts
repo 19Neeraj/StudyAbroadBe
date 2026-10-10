@@ -27,6 +27,9 @@ export const PERMISSION_CATALOG = {
   },
   lead: {
     'lead.view': 'View leads',
+    'lead.viewAssignedOnly':
+      'View only assigned leads: restricts lists, search, counts, exports, reports and lead details to leads where the user is the assigned counsellor or manager',
+    'lead.viewInquiries': 'View re-inquiry history and inquiry attribution of leads the user can see',
     'lead.create': 'Create leads',
     'lead.update': 'Update leads',
     'lead.delete': 'Delete leads',
@@ -83,6 +86,18 @@ export const PERMISSION_CATALOG = {
     'recording.download': 'Download call recordings',
     'communication.manage': 'Configure calling providers, recording consent and retention',
   },
+  integration: {
+    'integration.view': 'View integrations, sync history and imported leads',
+    'integration.manage': 'Connect, sync, retry and disconnect integrations; field mapping and API keys',
+  },
+  marketing: {
+    'marketing.view': 'View campaigns, ad spend, attribution and marketing reports',
+    'marketing.manage': 'Manage attribution hierarchy, campaign mappings and UTM templates',
+    'marketing.export': 'Export marketing reports',
+  },
+  notification: {
+    'notification.send': 'Send team messages to users, roles or branches',
+  },
   device: {
     'device.manage': 'View team devices and sign them out remotely',
   },
@@ -98,6 +113,17 @@ export type Permission = { [M in PermissionModule]: keyof Catalog[M] }[Permissio
 export const ALL_PERMISSIONS = Object.values(PERMISSION_CATALOG).flatMap((group) =>
   Object.keys(group),
 ) as Permission[];
+
+/**
+ * Permissions that *narrow* access instead of granting it. Full-access roles (Organization Admin,
+ * Super Admin) never hold them, and only unrestricted users may add or remove them (utils/access.ts).
+ */
+export const RESTRICTION_PERMISSIONS = ['lead.viewAssignedOnly'] as const satisfies readonly Permission[];
+const restrictionSet = new Set<string>(RESTRICTION_PERMISSIONS);
+export const isRestriction = (p: string) => restrictionSet.has(p);
+
+/** Everything a full-access role holds. */
+export const FULL_ACCESS_PERMISSIONS = ALL_PERMISSIONS.filter((p) => !restrictionSet.has(p));
 
 const permissionSet = new Set<string>(ALL_PERMISSIONS);
 export function isPermission(value: string): value is Permission {

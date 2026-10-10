@@ -43,6 +43,8 @@ export interface DuplicateMatch {
   leadNumber: number;
   fullName: string;
   matchedOn: ('phone' | 'whatsappNumber' | 'email')[];
+  /** The existing lead's phone equals the submitted phone: a new submission becomes a re-inquiry of it. */
+  samePhone: boolean;
   leadStage: string;
   leadStatus: string;
   originalSource: string;
@@ -111,6 +113,7 @@ export async function findDuplicates(
       leadNumber: l.leadNumber,
       fullName: l.fullName,
       matchedOn,
+      samePhone: !!contact.phone && l.phone === contact.phone,
       leadStage: l.leadStage,
       leadStatus: l.leadStatus,
       originalSource: l.sourceHistory?.[0]?.leadSource ?? l.leadSource,

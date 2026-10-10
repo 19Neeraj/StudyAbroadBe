@@ -1,4 +1,4 @@
-import { ALL_PERMISSIONS, type Permission } from './permissions.js';
+import { ALL_PERMISSIONS, FULL_ACCESS_PERMISSIONS, type Permission } from './permissions.js';
 
 /**
  * Data scope decides *which* records a permission applies to:
@@ -20,7 +20,7 @@ export interface DefaultRole {
   permissions: Permission[];
 }
 
-const VIEW_ALL = ALL_PERMISSIONS.filter((p) => p.endsWith('.view'));
+const VIEW_ALL = ALL_PERMISSIONS.filter((p) => p.endsWith('.view') || p === 'lead.viewInquiries');
 
 /** Seeded into every new organization. Admins can edit these or add their own. */
 export const DEFAULT_ROLES: DefaultRole[] = [
@@ -29,7 +29,7 @@ export const DEFAULT_ROLES: DefaultRole[] = [
     name: 'Organization Admin',
     description: 'Full access to the organization',
     dataScope: 'organization',
-    permissions: [...ALL_PERMISSIONS],
+    permissions: [...FULL_ACCESS_PERMISSIONS],
   },
   {
     key: 'management',
@@ -44,11 +44,14 @@ export const DEFAULT_ROLES: DefaultRole[] = [
     description: 'Manages counsellors and leads in assigned branches',
     dataScope: 'branch',
     permissions: [
+      'notification.send',
+      'marketing.view',
       'user.view',
       'branch.view',
       'settings.view',
       'role.view',
       'lead.view',
+      'lead.viewInquiries',
       'lead.create',
       'lead.update',
       'lead.assign',
@@ -90,6 +93,7 @@ export const DEFAULT_ROLES: DefaultRole[] = [
       'settings.view',
       'branch.view',
       'lead.view',
+      'lead.viewInquiries',
       'lead.create',
       'lead.update',
       'lead.export',
@@ -97,6 +101,10 @@ export const DEFAULT_ROLES: DefaultRole[] = [
       'event.manage',
       'report.view',
       'report.export',
+      'integration.view',
+      'marketing.view',
+      'marketing.manage',
+      'marketing.export',
     ],
   },
   {
@@ -108,6 +116,7 @@ export const DEFAULT_ROLES: DefaultRole[] = [
       'settings.view',
       'branch.view',
       'lead.view',
+      'lead.viewInquiries',
       'lead.create',
       'lead.update',
       'lead.changeStage',
@@ -139,6 +148,7 @@ export const DEFAULT_ROLES: DefaultRole[] = [
       'settings.view',
       'branch.view',
       'lead.view',
+      'lead.viewInquiries',
       'student.view',
       'student.update',
       'university.view',

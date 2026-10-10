@@ -23,6 +23,9 @@ const followUpSchema = new Schema(
     status: { type: String, enum: FOLLOWUP_STATUSES, default: 'pending', required: true },
     outcome: { type: String, trim: true },
     completedAt: { type: Date },
+    /** Notification markers: each reminder is sent once. */
+    remindedAt: { type: Date, default: null },
+    overdueNotifiedAt: { type: Date, default: null },
     completedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     cancelledAt: { type: Date },
     cancelReason: { type: String, trim: true },

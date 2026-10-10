@@ -1,3 +1,4 @@
+import * as triggers from '../notifications/triggers.js';
 import { Types } from 'mongoose';
 import { z } from '../../docs/zod.js';
 import type { ServiceContext } from '../../types/auth.js';
@@ -114,6 +115,7 @@ export async function createPayment(ctx: ServiceContext, input: z.infer<typeof c
   await refreshApplicationPaymentStatus(ctx.organizationId, payment.applicationId);
   if (['tuition_deposit', 'tuition_fee'].includes(input.purpose)) await advanceLeadToMilestone(ctx, student.leadId, 'payment', `Tuition payment recorded`);
   if (input.paymentStatus === 'success' && student.assignedCounsellor) emitTo([rooms.user(student.assignedCounsellor.toString())], 'payment.updated', { paymentId: payment._id.toString(), status: 'success' });
+  if (input.paymentStatus === 'success') await triggers.paymentReceived(ctx.organizationId, payment, student.fullName, ctx.userId);
   return getPayment(ctx, payment._id);
 }
 
@@ -137,6 +139,7 @@ export async function updatePayment(ctx: ServiceContext, id: string, input: z.in
       metadata: { paymentId: payment._id.toString() },
     });
     if (payment.assignedCounsellor) emitTo([rooms.user(payment.assignedCounsellor.toString())], 'payment.updated', { paymentId: payment._id.toString(), status: input.paymentStatus });
+    if (input.paymentStatus === 'success') await triggers.paymentReceived(ctx.organizationId, payment, null, ctx.userId);
   }
   // Financial records: every change is audited with before/after values.
   await recordAudit(ctx, { entityType: 'payment', entityId: payment._id, action: 'payment.updated', oldValue: before, newValue: { amount: payment.amount, paymentStatus: payment.paymentStatus, transactionId: payment.transactionId } });

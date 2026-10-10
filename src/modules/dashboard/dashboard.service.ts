@@ -2,7 +2,7 @@ import { Types, type PipelineStage } from 'mongoose';
 import { COMMUNICATION_TYPES } from '../../constants/activities.js';
 import { DEFAULT_MILESTONE_STAGES, STAGE_MILESTONES, type StageMilestone } from '../../constants/lookups.js';
 import type { ServiceContext } from '../../types/auth.js';
-import { hasOrgScope } from '../../utils/access.js';
+import { recordScope } from '../../utils/access.js';
 import { compileFilterTree } from '../../utils/filterTree.js';
 import { addDays, localParts, resolvePeriod, startOfDayInTz, startOfLocalDate, type PeriodRange } from '../../utils/time.js';
 import { ActivityModel } from '../activities/activity.model.js';
@@ -295,14 +295,16 @@ export async function dashboardOverview(ctx: ServiceContext, q: DashboardQuery) 
 
   // 6) Logged communications in the period (calls, WhatsApp, emails, meetings).
   const actFilter: Filter = { organizationId: ctx.organizationId, occurredAt: { $gte: periodFrom, $lt: range.to }, type: { $in: COMMUNICATION_TYPES } };
-  if (!hasOrgScope(ctx)) {
-    if (ctx.dataScope === 'own') actFilter.userId = ctx.userId;
+  if (recordScope(ctx) !== 'organization') {
+    if (recordScope(ctx) === 'own') actFilter.userId = ctx.userId;
     else {
       const teammates = await UserModel.find({ organizationId: ctx.organizationId, branchIds: { $in: ctx.branchIds } }).select('_id').lean();
       actFilter.userId = { $in: [ctx.userId, ...teammates.map((u) => u._id)] };
     }
   }
-  if (q.counsellor && q.counsellor !== 'unassigned') actFilter.userId = new Types.ObjectId(q.counsellor);
+  if (q.counsellor && q.counsellor !== 'unassigned') {
+    actFilter.userId = recordScope(ctx) === 'own' && q.counsellor !== ctx.userId.toString() ? null : new Types.ObjectId(q.counsellor);
+  }
   const activityAgg = ActivityModel.aggregate<{ _id: { type: string; user: Types.ObjectId }; count: number }>([
     { $match: actFilter },
     { $group: { _id: { type: '$type', user: '$userId' }, count: { $sum: 1 } } },

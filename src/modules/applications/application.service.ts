@@ -1,3 +1,4 @@
+import * as triggers from '../notifications/triggers.js';
 import { Types } from 'mongoose';
 import type { z } from '../../docs/zod.js';
 import type { ServiceContext } from '../../types/auth.js';
@@ -10,7 +11,7 @@ import { recordAudit } from '../audit/audit.service.js';
 import { nextSequence } from '../counters/counter.model.js';
 import { resolveAssignee } from '../leads/lead.assignment.js';
 import { advanceLeadToMilestone } from '../leads/lead.progress.js';
-import { assertLookupValues, listLookups } from '../settings/lookup.service.js';
+import { assertLookupValues, listLookups, lookupMetaByKey } from '../settings/lookup.service.js';
 import { loadStudent } from '../students/student.service.js';
 import { StudentModel } from '../students/student.model.js';
 import { CourseModel, UniversityModel } from '../universities/university.model.js';
@@ -327,6 +328,8 @@ export async function changeApplicationStatus(ctx: ServiceContext, id: string, i
   });
   await recordAudit(ctx, { entityType: 'application', entityId: app._id, action: 'application.status_changed', oldValue: { status: previous }, newValue: { status: input.status } });
   await applyStatusSideEffects(ctx, app, input.status, uni?.name ?? 'university');
+  const statusLabel = (await lookupMetaByKey(ctx, 'application_status')).get(input.status)?.label ?? input.status;
+  await triggers.applicationUpdated(ctx.organizationId, app, `${statusLabel} · ${uni?.name ?? 'university'}`, ctx.userId);
   return getApplication(ctx, app._id);
 }
 
@@ -363,6 +366,7 @@ export async function updateOffer(ctx: ServiceContext, id: string, input: z.infe
   await recordAudit(ctx, { entityType: 'application', entityId: app._id, action: 'application.offer_updated', oldValue: { offer: previous }, newValue: { offer: input.status } });
   if (statusChanged) await applyStatusSideEffects(ctx, app, app.status, uni?.name ?? 'university');
   else if (input.status === 'conditional' || input.status === 'unconditional') await advanceLeadToMilestone(ctx, app.leadId, 'offer', `Offer from ${uni?.name ?? 'university'}`);
+  if ((input.status === 'conditional' || input.status === 'unconditional') && previous !== input.status) await triggers.offerReceived(ctx.organizationId, app, `${input.status === 'conditional' ? 'Conditional' : 'Unconditional'} offer from ${uni?.name ?? 'university'}`, ctx.userId);
   return getApplication(ctx, app._id);
 }
 

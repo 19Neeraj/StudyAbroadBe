@@ -1,3 +1,4 @@
+import * as triggers from '../notifications/triggers.js';
 import { randomUUID } from 'node:crypto';
 import { Types } from 'mongoose';
 import { z } from '../../docs/zod.js';
@@ -201,6 +202,7 @@ export async function reviewDocument(ctx: ServiceContext, id: string, input: z.i
   });
   await recordAudit(ctx, { entityType: 'document', entityId: doc._id, action: `document.${input.decision}`, oldValue: { status: previous }, newValue: { status }, metadata: { reason: input.reason } });
   if (doc.assignedCounsellor) emitTo([rooms.user(doc.assignedCounsellor.toString())], 'document.updated', { documentId: doc._id.toString(), status });
+  if (input.decision === 'reject' || input.decision === 'reupload') await triggers.documentRejected(ctx.organizationId, doc, label, input.reason, ctx.userId);
   return getDocument(ctx, doc._id);
 }
 

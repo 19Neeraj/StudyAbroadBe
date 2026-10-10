@@ -42,6 +42,11 @@ export const LEAD_FILTER_FIELDS: FilterFieldCatalog = {
   utmCampaign: { label: 'UTM campaign', type: 'text', group: 'Marketing' },
   anySource: { label: 'Any enquiry source (incl. repeat enquiries)', type: 'lookup', lookupType: 'lead_source', path: 'sourceHistory.leadSource', group: 'Marketing' },
 
+  inquiryCount: { label: 'Number of inquiries', type: 'number', group: 'Inquiries' },
+  firstInquiryAt: { label: 'First inquiry', type: 'date', group: 'Inquiries' },
+  lastInquiryAt: { label: 'Last inquiry', type: 'date', group: 'Inquiries' },
+  lastInquiryChannel: { label: 'Last inquiry channel', type: 'text', group: 'Inquiries' },
+
   city: { label: 'City', type: 'text', group: 'Contact' },
   state: { label: 'State', type: 'text', group: 'Contact' },
   country: { label: 'Country of residence', type: 'text', group: 'Contact' },

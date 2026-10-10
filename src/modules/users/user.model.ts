@@ -25,6 +25,24 @@ const userSchema = new Schema(
     avatarUrl: { type: String, trim: true },
     isActive: { type: Boolean, default: true },
     lastLoginAt: { type: Date },
+    /**
+     * TOTP two-factor authentication. Secrets are AES-256-GCM encrypted (bound to the user id) and
+     * never selected by default; recovery codes are stored only as keyed hashes.
+     */
+    twoFactor: {
+      enabled: { type: Boolean, default: false },
+      enabledAt: { type: Date },
+      secretEnc: { type: String, select: false },
+      /** Set during enrollment until the first code is verified. */
+      pendingSecretEnc: { type: String, select: false },
+      pendingCreatedAt: { type: Date },
+      /** Last accepted TOTP time step: a code can't be used twice (replay protection). */
+      lastUsedStep: { type: Number, select: false },
+      recoveryCodes: { type: [{ hash: String, usedAt: Date, _id: false }], select: false, default: undefined },
+      recoveryCodesGeneratedAt: { type: Date },
+      resetAt: { type: Date },
+      resetBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
@@ -34,6 +52,8 @@ const userSchema = new Schema(
       transform: (_doc, ret: Record<string, unknown>) => {
         delete ret.passwordHash;
         delete ret.passwordReset;
+        const tf = ret.twoFactor as Record<string, unknown> | undefined;
+        if (tf) for (const k of ['secretEnc', 'pendingSecretEnc', 'lastUsedStep', 'recoveryCodes']) delete tf[k];
         delete ret.__v;
         return ret;
       },

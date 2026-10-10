@@ -18,6 +18,9 @@ export const loginBody = z
       description: 'web: refresh token is set as an httpOnly cookie. Mobile: returned in the body.',
     }),
     deviceName: z.string().trim().max(100).optional(),
+    rememberMe: z.boolean().default(true).openapi({
+      description: 'Web only: false keeps the refresh cookie for this browser session only (it is cleared when the browser closes)',
+    }),
   })
   .openapi('LoginRequest');
 
@@ -72,6 +75,13 @@ export const meDto = z
     role: z.object({ id: z.string(), key: z.string(), name: z.string(), dataScope: z.string() }),
     permissions: z.array(z.string()),
     branches: z.array(z.object({ id: z.string(), name: z.string(), code: z.string() })),
+    isDemo: z.boolean().openapi({ description: 'Read-only demo organization' }),
+    twoFactor: z.object({
+      enabled: z.boolean(),
+      required: z.boolean(),
+      enrollmentRequiredBy: z.string().nullable().openapi({ description: 'Mandatory 2FA not set up yet: deadline of the grace period' }),
+      enrollmentOverdue: z.boolean(),
+    }),
   })
   .openapi('CurrentUser');
 
@@ -83,7 +93,17 @@ export const tokensDto = z
   })
   .openapi('AuthTokens');
 
-export const loginDto = tokensDto.extend({ user: meDto }).openapi('LoginResponse');
+export const loginDto = z
+  .object({
+    status: z.enum(['authenticated', 'two_factor_required', 'two_factor_enrollment_required']),
+    accessToken: z.string().optional().openapi({ description: 'Only when status is authenticated' }),
+    expiresIn: z.number().optional(),
+    refreshToken: z.string().optional().openapi({ description: 'Mobile clients only' }),
+    user: meDto.optional(),
+    challengeToken: z.string().optional().openapi({ description: 'Single-use, 5-minute token for the second step; cannot call other APIs' }),
+    methods: z.array(z.enum(['totp', 'recovery_code'])).optional(),
+  })
+  .openapi('LoginResponse');
 
 export const sessionDto = z
   .object({

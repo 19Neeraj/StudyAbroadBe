@@ -68,58 +68,54 @@ describe('Leads: create, normalize, number', () => {
 });
 
 describe('Leads: duplicate detection', () => {
-  it('detects duplicates across phone formats and email casing, and offers resolutions', async () => {
+  it('records a known phone (any format) as a re-inquiry; email-only matches still ask for a resolution', async () => {
     const { org, token } = await createOrgWithAdmin();
     const original = await createLead(token, { firstName: 'Riya', phone: '+91 98765 11111', email: 'riya@example.com', leadSource: 'meta', campaign: 'Spring' });
     const originalId = original.body.data.lead._id;
 
-    const dup = await createLead(token, { firstName: 'Riya S', phone: '09876511111', leadSource: 'google' });
-    expect(dup.status).toBe(409);
-    expect(dup.body.code).toBe('DUPLICATE_LEAD');
-    expect(dup.body.details.duplicates[0]).toMatchObject({
-      _id: originalId,
-      leadNumber: 1001,
-      matchedOn: ['phone'],
-      originalSource: 'meta',
-      latestSource: 'meta',
-      campaign: 'Spring',
-    });
-
+    const byPhone = await api().post('/api/v1/leads/check-duplicates').set(bearer(token)).send({ phone: '09876511111' });
+    expect(byPhone.body.data[0]).toMatchObject({ _id: originalId, leadNumber: 1001, matchedOn: ['phone'], samePhone: true, originalSource: 'meta', campaign: 'Spring' });
     const byEmail = await api().post('/api/v1/leads/check-duplicates').set(bearer(token)).send({ email: 'RIYA@example.com' });
     expect(byEmail.body.data[0].matchedOn).toEqual(['email']);
 
-    // keep_existing: no new lead; enquiry recorded on the existing one, empty fields filled.
-    const kept = await createLead(token, { firstName: 'Riya S', phone: '09876511111', leadSource: 'google', city: 'Pune', duplicateAction: 'keep_existing' });
-    expect(kept.status).toBe(200);
-    expect(kept.body.data).toMatchObject({ outcome: 'added_to_existing', leadId: originalId });
-    expect(kept.body.data.lead.city).toBe('Pune');
-    expect(kept.body.data.lead.sourceHistory.map((s: { leadSource: string }) => s.leadSource)).toEqual(['meta', 'google']);
+    // Same phone in another format: no new lead, whatever duplicateAction says; the enquiry is recorded and empty fields filled.
+    const again = await createLead(token, { firstName: 'Riya S', phone: '09876511111', leadSource: 'google', city: 'Pune', duplicateAction: 'create_separate' });
+    expect(again.status).toBe(200);
+    expect(again.body.data).toMatchObject({ outcome: 'added_to_existing', leadId: originalId, reinquiry: true, inquiryCount: 2 });
+    expect(again.body.data.lead).toMatchObject({ city: 'Pune', firstName: 'Riya', inquiryCount: 2 });
+    expect(again.body.data.lead.sourceHistory.map((s: { leadSource: string }) => s.leadSource)).toEqual(['meta', 'google']);
     expect(await LeadModel.countDocuments({ organizationId: org._id })).toBe(1);
     expect(await ActivityModel.countDocuments({ organizationId: org._id, type: 'duplicate_enquiry' })).toBe(1);
 
-    const again = await createLead(token, { firstName: 'Riya', email: 'riya@example.com' });
-    expect(again.body.details.duplicates[0].latestSource).toBe('google');
+    // Email-only match: 409 with the latest source, resolved with duplicateAction.
+    const emailOnly = await createLead(token, { firstName: 'Riya', email: 'riya@example.com' });
+    expect(emailOnly.status).toBe(409);
+    expect(emailOnly.body.code).toBe('DUPLICATE_LEAD');
+    expect(emailOnly.body.details.duplicates[0]).toMatchObject({ latestSource: 'google', samePhone: false });
 
     // mark_duplicate / create_separate need lead.merge.
     const counsellor = await createUserAs(token, org._id, 'counsellor');
-    const denied = await createLead(counsellor.token, { phone: '9876511111', duplicateAction: 'create_separate' });
+    const denied = await createLead(counsellor.token, { email: 'riya@example.com', duplicateAction: 'create_separate' });
     expect(denied.status).toBe(403);
-
-    const marked = await createLead(token, { phone: '9876511111', duplicateAction: 'mark_duplicate' });
+    const marked = await createLead(token, { email: 'riya@example.com', duplicateAction: 'mark_duplicate' });
     expect(marked.status).toBe(201);
     expect(marked.body.data.lead).toMatchObject({ leadStatus: 'duplicate', duplicateOf: originalId });
   });
 
-  it('blocks editing a lead into a duplicate unless allowed', async () => {
+  it('never lets an edit give a lead another active lead\'s phone; allowDuplicate still works for email', async () => {
     const { token } = await createOrgWithAdmin();
-    await createLead(token, { phone: '9876522222' });
+    await createLead(token, { phone: '9876522222', email: 'a@example.com' });
     const b = await createLead(token, { phone: '9876533333' });
     const id = b.body.data.lead._id;
-    const conflict = await api().patch(`/api/v1/leads/${id}`).set(bearer(token)).send({ phone: '98765 22222' });
-    expect(conflict.status).toBe(409);
-    const allowed = await api().patch(`/api/v1/leads/${id}`).set(bearer(token)).send({ phone: '98765 22222', allowDuplicate: true });
+    for (const allowDuplicate of [false, true]) {
+      const conflict = await api().patch(`/api/v1/leads/${id}`).set(bearer(token)).send({ phone: '98765 22222', allowDuplicate });
+      expect(conflict.status).toBe(409);
+      expect(conflict.body.code).toBe('DUPLICATE_PHONE');
+    }
+    const emailConflict = await api().patch(`/api/v1/leads/${id}`).set(bearer(token)).send({ email: 'a@example.com' });
+    expect(emailConflict.status).toBe(409);
+    const allowed = await api().patch(`/api/v1/leads/${id}`).set(bearer(token)).send({ email: 'a@example.com', allowDuplicate: true });
     expect(allowed.status).toBe(200);
-    expect(allowed.body.data.phone).toBe('+919876522222');
   });
 
   it('merges a duplicate into the kept lead without losing data', async () => {

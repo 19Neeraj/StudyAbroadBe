@@ -20,6 +20,24 @@ const sourceTouchSchema = new Schema(
   { _id: false },
 );
 
+/** Denormalized facts of one touchpoint (UTM values lower-cased, as matched by filters and reports). */
+const touchSummary = {
+  origin: String,
+  occurredAt: Date,
+  provider: String,
+  campaignExternalId: String,
+  adsetExternalId: String,
+  adExternalId: String,
+  formExternalId: String,
+  utmSource: String,
+  utmMedium: String,
+  utmCampaign: String,
+  utmTerm: String,
+  utmContent: String,
+  landingPage: String,
+  isDirect: Boolean,
+};
+
 const leadSchema = new Schema(
   {
     ...tenantField,
@@ -35,6 +53,13 @@ const leadSchema = new Schema(
 
     /** E.164, normalized (spec §13). */
     phone: { type: String, trim: true },
+    /**
+     * Uniqueness key: the normalized phone of an *active* lead (not deleted, not merged away).
+     * A partial unique index on { organizationId, normalizedPhone } makes it impossible — even under
+     * concurrent requests — for two active leads of one organization to share a phone number.
+     * Maintained by the pre-save hook; never set it directly.
+     */
+    normalizedPhone: { type: String },
     whatsappNumber: { type: String, trim: true },
     /** Lower-cased. */
     email: { type: String, trim: true, lowercase: true },
@@ -69,6 +94,31 @@ const leadSchema = new Schema(
     utmTerm: { type: String, trim: true },
     utmContent: { type: String, trim: true },
     sourceHistory: { type: [sourceTouchSchema], default: [] },
+    /** Attribution (Integrations plan §2.6): first touch never changes once set; last touch follows the rules. */
+    firstTouchId: { type: Schema.Types.ObjectId, ref: 'AttributionTouchpoint' },
+    lastTouchId: { type: Schema.Types.ObjectId, ref: 'AttributionTouchpoint' },
+    /** Denormalized first-touch IDs and P/S/T snapshot, for fast marketing reports. */
+    firstTouch: touchSummary,
+    /** Same summary for the latest (last-touch) inquiry; filters in "latest" attribution mode use it. */
+    latestTouch: touchSummary,
+    /** Original (first-touch) Primary/Secondary/Tertiary attribution. Never overwritten by later inquiries. */
+    attribution: {
+      source: { l1: { type: Schema.Types.ObjectId }, l2: { type: Schema.Types.ObjectId }, l3: { type: Schema.Types.ObjectId } },
+      medium: { l1: { type: Schema.Types.ObjectId }, l2: { type: Schema.Types.ObjectId }, l3: { type: Schema.Types.ObjectId } },
+      campaign: { l1: { type: Schema.Types.ObjectId }, l2: { type: Schema.Types.ObjectId }, l3: { type: Schema.Types.ObjectId } },
+    },
+    /** Latest (last-touch) attribution: follows the most recent non-direct inquiry. */
+    latestAttribution: {
+      source: { l1: { type: Schema.Types.ObjectId }, l2: { type: Schema.Types.ObjectId }, l3: { type: Schema.Types.ObjectId } },
+      medium: { l1: { type: Schema.Types.ObjectId }, l2: { type: Schema.Types.ObjectId }, l3: { type: Schema.Types.ObjectId } },
+      campaign: { l1: { type: Schema.Types.ObjectId }, l2: { type: Schema.Types.ObjectId }, l3: { type: Schema.Types.ObjectId } },
+    },
+
+    /** Inquiry counters (maintained from LeadInquiry). inquiryCount > 1 means the lead re-inquired. */
+    inquiryCount: { type: Number, default: 1 },
+    firstInquiryAt: { type: Date },
+    lastInquiryAt: { type: Date },
+    lastInquiryChannel: { type: String },
 
     assignedCounsellor: { type: Schema.Types.ObjectId, ref: 'User' },
     assignedManager: { type: Schema.Types.ObjectId, ref: 'User' },
@@ -105,11 +155,19 @@ const leadSchema = new Schema(
 leadSchema.pre('validate', function () {
   this.fullName = [this.firstName, this.lastName].filter(Boolean).join(' ');
   this.nameTokens = [...new Set(this.fullName.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean))];
+  // Only active leads hold the uniqueness key; deleting or merging a lead releases the number.
+  // (Skipped for partially loaded documents, which can't tell.)
+  if (!['phone', 'deletedAt', 'mergedInto'].every((p) => this.isSelected(p))) return;
+  this.set('normalizedPhone', !this.deletedAt && !this.mergedInto && this.phone ? this.phone : undefined);
 });
 
 // Compound indexes follow the list/search/duplicate query patterns (spec §39).
 leadSchema.index({ organizationId: 1, leadNumber: 1 }, { unique: true });
 leadSchema.index({ organizationId: 1, phone: 1 });
+leadSchema.index(
+  { organizationId: 1, normalizedPhone: 1 },
+  { unique: true, name: 'uniq_active_phone_per_org', partialFilterExpression: { normalizedPhone: { $type: 'string' } } },
+);
 leadSchema.index({ organizationId: 1, whatsappNumber: 1 });
 leadSchema.index({ organizationId: 1, email: 1 });
 leadSchema.index({ organizationId: 1, nameTokens: 1 });
@@ -121,6 +179,12 @@ leadSchema.index({ organizationId: 1, leadStage: 1, updatedAt: -1 });
 leadSchema.index({ organizationId: 1, leadStatus: 1, createdAt: -1 });
 leadSchema.index({ organizationId: 1, leadSource: 1, createdAt: -1 });
 leadSchema.index({ organizationId: 1, campaign: 1, createdAt: -1 });
+leadSchema.index({ organizationId: 1, 'firstTouch.provider': 1, 'firstTouch.campaignExternalId': 1, createdAt: -1 });
+leadSchema.index({ organizationId: 1, 'attribution.campaign.l1': 1, createdAt: -1 });
+leadSchema.index({ organizationId: 1, 'attribution.source.l1': 1, createdAt: -1 });
+leadSchema.index({ organizationId: 1, 'latestAttribution.source.l1': 1, lastInquiryAt: -1 });
+leadSchema.index({ organizationId: 1, 'latestAttribution.campaign.l1': 1, lastInquiryAt: -1 });
+leadSchema.index({ organizationId: 1, inquiryCount: 1, lastInquiryAt: -1 });
 leadSchema.index({ organizationId: 1, nextFollowUpAt: 1 });
 leadSchema.plugin(tenantPlugin);
 

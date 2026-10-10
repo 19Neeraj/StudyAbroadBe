@@ -98,6 +98,7 @@ export async function provisionOrganization(
       dataScope: 'organization',
       branchIds: [branch._id],
       isSuperAdmin: false,
+      assignedOnly: false,
       meta: actor.meta,
     };
     const adminUser = await createUser(systemCtx, {

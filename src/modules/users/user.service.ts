@@ -4,7 +4,7 @@ import { ORG_ADMIN_ROLE_KEY } from '../../constants/roles.js';
 import type { z } from '../../docs/zod.js';
 import { sendEmailSafe } from '../../integrations/email/index.js';
 import type { ServiceContext } from '../../types/auth.js';
-import { accessibleBranchIds, assertBranchesAccessible, holdsAll } from '../../utils/access.js';
+import { accessibleBranchIds, assertBranchesAccessible, roleWithinActor } from '../../utils/access.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { hashToken, randomToken } from '../../utils/crypto.js';
 import { normalizeEmail, normalizePhone } from '../../utils/normalize.js';
@@ -109,7 +109,7 @@ async function resolveAssignableRole(ctx: ServiceContext, roleId: string) {
     .lean();
   if (!role || role.isSuperAdmin)
     throw ApiError.validation([{ field: 'body.roleId', message: 'Role not found' }]);
-  if (!holdsAll(ctx, role.permissions))
+  if (!roleWithinActor(ctx, role.permissions))
     throw ApiError.forbidden('You cannot assign a role with more permissions than your own');
   return role;
 }
@@ -149,7 +149,7 @@ async function loadManageableUser(ctx: ServiceContext, id: string) {
   const role = await RoleModel.findOne({ organizationId: ctx.organizationId, _id: user.roleId })
     .select('key permissions')
     .lean();
-  if (role && !holdsAll(ctx, role.permissions))
+  if (role && !roleWithinActor(ctx, role.permissions))
     throw ApiError.forbidden('You cannot modify a user with more permissions than your own');
   return { user, role };
 }

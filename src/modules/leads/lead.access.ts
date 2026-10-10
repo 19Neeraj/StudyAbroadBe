@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import type { AuthContext, ServiceContext } from '../../types/auth.js';
-import { hasOrgScope } from '../../utils/access.js';
+import { recordScope } from '../../utils/access.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { normalizeEmail, normalizePhone } from '../../utils/normalize.js';
 import { escapeRegex } from '../../utils/pagination.js';
@@ -11,13 +11,17 @@ type Filter = Record<string, unknown>;
 /**
  * Which leads the user may see (spec §6–8):
  *  organization → all; branch → leads in their branches or assigned to them; own → assigned to them.
- * Deleted leads are never visible.
+ * "Assigned" means the user is the lead's assigned counsellor or assigned manager (not its creator).
+ * `lead.viewAssignedOnly` forces "own" whatever the role's scope. Deleted leads are never visible.
+ * Every lead path (list, search, pipeline, detail, counts, exports, dashboards, reports) uses this,
+ * so the restriction is applied inside the database query, before sorting, paging and counting.
  */
 export function leadScopeFilter(ctx: AuthContext): Filter {
   const base: Filter = { organizationId: ctx.organizationId, deletedAt: null };
-  if (hasOrgScope(ctx)) return base;
+  const scope = recordScope(ctx);
+  if (scope === 'organization') return base;
   const mine = [{ assignedCounsellor: ctx.userId }, { assignedManager: ctx.userId }];
-  if (ctx.dataScope === 'branch') return { ...base, $or: [{ branchId: { $in: ctx.branchIds } }, ...mine] };
+  if (scope === 'branch') return { ...base, $or: [{ branchId: { $in: ctx.branchIds } }, ...mine] };
   return { ...base, $or: mine };
 }
 

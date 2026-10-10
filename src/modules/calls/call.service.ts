@@ -1,3 +1,4 @@
+import * as triggers from '../notifications/triggers.js';
 import { Types } from 'mongoose';
 import type { z } from '../../docs/zod.js';
 import { env } from '../../config/env.js';
@@ -8,7 +9,7 @@ import type { CallEvent } from '../../integrations/calling/index.js';
 import { enqueue } from '../../jobs/queue.js';
 import { emitTo, rooms } from '../../sockets/index.js';
 import type { AuthContext, ServiceContext } from '../../types/auth.js';
-import { hasOrgScope } from '../../utils/access.js';
+import { recordScope } from '../../utils/access.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { buildPagination, toPaging, toSort } from '../../utils/pagination.js';
 import { ActivityModel } from '../activities/activity.model.js';
@@ -41,8 +42,9 @@ export const isConnected = (c: { status: string; duration?: number | null }) => 
 /** organization → all calls; branch → my branches or mine; own → calls I made/received. */
 export function callScopeFilter(ctx: AuthContext): Filter {
   const base: Filter = { organizationId: ctx.organizationId };
-  if (hasOrgScope(ctx)) return base;
-  if (ctx.dataScope === 'branch') return { ...base, $or: [{ branchId: { $in: ctx.branchIds } }, { counsellorId: ctx.userId }] };
+  const scope = recordScope(ctx);
+  if (scope === 'organization') return base;
+  if (scope === 'branch') return { ...base, $or: [{ branchId: { $in: ctx.branchIds } }, { counsellorId: ctx.userId }] };
   return { ...base, counsellorId: ctx.userId };
 }
 
@@ -172,6 +174,7 @@ export async function finalizeCall(actor: Actor, call: CallDoc): Promise<void> {
   if (connected) await markContacted(call.organizationId, call.leadId, call.answeredAt ?? call.startedAt);
   else await LeadModel.updateOne({ organizationId: call.organizationId, _id: call.leadId }, { lastActivityAt: new Date() });
   if (firstTime) emitCall(connected ? 'call.completed' : 'call.missed', call);
+  if (firstTime && !connected && call.direction === 'incoming') await triggers.missedCall(call.organizationId, call);
   await maybeQueueRecording(call);
 }
 
@@ -318,6 +321,7 @@ export async function applyProviderEvent(organizationId: Types.ObjectId, provide
   if (event.recordingUrl) call.set('providerRecordingUrl', event.recordingUrl);
   await call.save();
 
+  if (created && !isTerminal(call.status)) await triggers.incomingCall(organizationId, call);
   if (call.status === 'answered') emitCall('call.answered', call);
   if (isTerminal(call.status) && call.leadId) {
     await finalizeCall({ organizationId, userId: call.counsellorId ?? new Types.ObjectId(), meta: {} }, call);
@@ -423,11 +427,11 @@ export async function editSummary(ctx: ServiceContext, callId: string, input: z.
 /** Transcript Center (spec §40): org-bounded full-text search, limited to calls the caller can see. */
 export async function searchTranscripts(ctx: ServiceContext, q: { q: string; page: number; limit: number; dateFrom?: Date | undefined; dateTo?: Date | undefined; counsellor?: string | undefined }) {
   const filter: Filter = { organizationId: ctx.organizationId, status: 'completed', $text: { $search: q.q } };
-  if (!hasOrgScope(ctx)) {
-    if (ctx.dataScope === 'branch') filter.$or = [{ branchId: { $in: ctx.branchIds } }, { counsellorId: ctx.userId }];
+  if (recordScope(ctx) !== 'organization') {
+    if (recordScope(ctx) === 'branch') filter.$or = [{ branchId: { $in: ctx.branchIds } }, { counsellorId: ctx.userId }];
     else filter.counsellorId = ctx.userId;
   }
-  if (q.counsellor) filter.counsellorId = new Types.ObjectId(q.counsellor);
+  if (q.counsellor) filter.counsellorId = recordScope(ctx) === 'own' && q.counsellor !== ctx.userId.toString() ? null : new Types.ObjectId(q.counsellor);
   if (q.dateFrom || q.dateTo) filter.createdAt = { ...(q.dateFrom ? { $gte: q.dateFrom } : {}), ...(q.dateTo ? { $lte: q.dateTo } : {}) };
   const { skip, limit } = toPaging(q);
   const [items, total] = await Promise.all([

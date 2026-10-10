@@ -1,7 +1,7 @@
 import { Types } from 'mongoose';
 import type { z } from '../../docs/zod.js';
 import type { AuthContext, ServiceContext } from '../../types/auth.js';
-import { canAccessBranch, hasOrgScope } from '../../utils/access.js';
+import { canAccessBranch, recordScope } from '../../utils/access.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { compileFilterTree } from '../../utils/filterTree.js';
 import { buildPagination, toPaging, toSort } from '../../utils/pagination.js';
@@ -28,9 +28,10 @@ type Filter = Record<string, unknown>;
 /** Same rules as leads: organization → all; branch → my branches or assigned to me; own → assigned to me. */
 export function studentScopeFilter(ctx: AuthContext): Filter {
   const base: Filter = { organizationId: ctx.organizationId, deletedAt: null };
-  if (hasOrgScope(ctx)) return base;
+  const scope = recordScope(ctx);
+  if (scope === 'organization') return base;
   const mine = [{ assignedCounsellor: ctx.userId }, { assignedManager: ctx.userId }];
-  if (ctx.dataScope === 'branch') return { ...base, $or: [{ branchId: { $in: ctx.branchIds } }, ...mine] };
+  if (scope === 'branch') return { ...base, $or: [{ branchId: { $in: ctx.branchIds } }, ...mine] };
   return { ...base, $or: mine };
 }
 

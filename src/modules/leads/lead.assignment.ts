@@ -1,3 +1,4 @@
+import { leadAssigned as notifyAssigned, leadsBulkAssigned as notifyBulkAssigned } from '../notifications/triggers.js';
 import { Types } from 'mongoose';
 import type { z } from '../../docs/zod.js';
 import type { ServiceContext } from '../../types/auth.js';
@@ -118,7 +119,10 @@ export async function assignLead(ctx: ServiceContext, id: string, input: z.infer
   const after = await LeadModel.findOne({ organizationId: ctx.organizationId, _id: lead._id })
     .select('organizationId assignedCounsellor assignedManager leadNumber fullName')
     .lean();
-  if (after) emitLeadEvent('lead.assigned', after, { leadNumber: after.leadNumber, fullName: after.fullName });
+  if (after) {
+    emitLeadEvent('lead.assigned', after, { leadNumber: after.leadNumber, fullName: after.fullName });
+    await notifyAssigned(ctx.organizationId, after, { counsellor: change.counsellor?._id, manager: change.manager?._id }, ctx.userId);
+  }
   return lead._id;
 }
 
@@ -157,6 +161,7 @@ export async function bulkAssignLeads(ctx: ServiceContext, input: z.infer<typeof
       });
     }
   }
+  await notifyBulkAssigned(ctx.organizationId, changedIds.length, { counsellor: change.counsellor?._id, manager: change.manager?._id }, ctx.userId);
   return { updated: changedIds.length, unchanged: leads.length - changedIds.length, skipped: ids.length - leads.length };
 }
 

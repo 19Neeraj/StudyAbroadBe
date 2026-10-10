@@ -9,7 +9,9 @@ import { createFollowUp, listLeadFollowUps } from '../followups/followup.service
 import { createFollowUpBody, followUpDto } from '../followups/followup.validation.js';
 import { idParams } from '../../utils/objectId.js';
 import { describeCatalog, filterFieldDto } from '../../utils/filterTree.js';
+import { ApiError } from '../../utils/ApiError.js';
 import { createModuleRouter } from '../../utils/router.js';
+import { listLeadInquiries, markInquiryHandled } from './lead.inquiries.js';
 import { LEAD_FILTER_FIELDS } from './lead.filters.js';
 import { loadLead } from './lead.access.js';
 import { assignLead, bulkAssignLeads } from './lead.assignment.js';
@@ -77,20 +79,28 @@ m.route({
   path: '/',
   summary: 'Create a lead (with duplicate detection)',
   description:
-    'If the phone, WhatsApp number or email matches an existing lead the API answers **409 `DUPLICATE_LEAD`** with ' +
-    '`details.duplicates`. Resend with `duplicateAction` to resolve it. Leads created by users who work on their own ' +
-    'records are assigned to them automatically.',
+    'A phone number that already belongs to an active lead of the organization is **never** a new lead: the submission is ' +
+    'recorded as a re-inquiry of that lead (`outcome: added_to_existing`, `reinquiry: true`, same `leadId`). ' +
+    'If only the WhatsApp number or email matches, the API answers **409 `DUPLICATE_LEAD`** with `details.duplicates`; resend ' +
+    'with `duplicateAction` to resolve it. Send an `Idempotency-Key` header to make retries safe (`outcome: duplicate_event`). ' +
+    'Leads created by users who work on their own records are assigned to them automatically.',
   permissions: ['lead.create'],
   body: createLeadBody,
-  response: z.object({ outcome: z.enum(['created', 'added_to_existing']), leadId: z.string(), lead: leadDto.nullable() }),
+  response: z.object({
+    outcome: z.enum(['created', 'added_to_existing', 'duplicate_event']),
+    leadId: z.string(),
+    lead: leadDto.nullable(),
+    reinquiry: z.boolean().optional().openapi({ description: 'True when the submission was recorded as a re-inquiry of the existing lead' }),
+    inquiryId: z.string().optional(),
+    inquiryCount: z.number().optional(),
+  }),
   successStatus: 201,
-  handler: async ({ ctx, body }) => {
-    const result = await service.createLead(ctx, body);
-    return {
-      status: result.outcome === 'created' ? 201 : 200,
-      message: result.outcome === 'created' ? 'Lead created' : 'Enquiry added to the existing lead',
-      data: result,
-    };
+  handler: async ({ ctx, body, req }) => {
+    const key = req.get('idempotency-key')?.trim();
+    if (key && (key.length < 8 || key.length > 128)) throw ApiError.validation([{ field: 'header.Idempotency-Key', message: 'Use 8–128 characters' }]);
+    const result = await service.createLead(ctx, body, { inquiry: { idempotencyKey: key ? `api:${ctx.userId.toString()}:${key}` : undefined } });
+    const messages = { created: 'Lead created', added_to_existing: 'Re-inquiry recorded on the existing lead', duplicate_event: 'Already received; nothing changed' } as const;
+    return { status: result.outcome === 'created' ? 201 : 200, message: messages[result.outcome], data: result };
   },
 });
 
@@ -299,6 +309,29 @@ m.route({
   response: followUpDto,
   successStatus: 201,
   handler: async ({ ctx, params, body }) => ({ message: 'Follow-up scheduled', data: await createFollowUp(ctx, params.id, body) }),
+});
+
+m.route({
+  method: 'get',
+  path: '/:id/inquiries',
+  summary: 'Inquiry history of a lead: first inquiry, re-inquiries, attribution of each, assignment decisions',
+  description: 'Same visibility as the lead itself (data scope and assigned-only access apply).',
+  permissions: ['lead.view', 'lead.viewInquiries'],
+  params: idParams,
+  handler: async ({ ctx, params }) => ({ data: await listLeadInquiries(ctx, params.id) }),
+});
+
+m.route({
+  method: 'post',
+  path: '/:id/inquiries/:inquiryId/handled',
+  summary: 'Mark a re-inquiry from the review queue as handled',
+  permissions: ['lead.update'],
+  params: z.object({ id: idParams.shape.id, inquiryId: idParams.shape.id }),
+  response: z.null(),
+  handler: async ({ ctx, params }) => {
+    await markInquiryHandled(ctx, params.id, params.inquiryId);
+    return { message: 'Inquiry marked as handled', data: null };
+  },
 });
 
 export const leadModule = m;

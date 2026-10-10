@@ -3,7 +3,7 @@ import type { z } from '../../docs/zod.js';
 import { hasPermissions } from '../../middlewares/auth.middleware.js';
 import { emitTo, rooms } from '../../sockets/index.js';
 import type { AuthContext, ServiceContext } from '../../types/auth.js';
-import { hasOrgScope } from '../../utils/access.js';
+import { recordScope } from '../../utils/access.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { buildPagination, toPaging } from '../../utils/pagination.js';
 import { addDays, startOfDayInTz } from '../../utils/time.js';
@@ -27,8 +27,9 @@ type Filter = Record<string, unknown>;
 /** own → assigned to me; branch → my branches or assigned to me; organization → all. */
 export function followUpScope(ctx: AuthContext): Filter {
   const base: Filter = { organizationId: ctx.organizationId };
-  if (hasOrgScope(ctx)) return base;
-  if (ctx.dataScope === 'branch') return { ...base, $or: [{ branchId: { $in: ctx.branchIds } }, { assignedTo: ctx.userId }] };
+  const scope = recordScope(ctx);
+  if (scope === 'organization') return base;
+  if (scope === 'branch') return { ...base, $or: [{ branchId: { $in: ctx.branchIds } }, { assignedTo: ctx.userId }] };
   return { ...base, assignedTo: ctx.userId };
 }
 

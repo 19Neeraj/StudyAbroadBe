@@ -1,7 +1,7 @@
 import { Types, type PipelineStage } from 'mongoose';
 import { DEFAULT_MILESTONE_STAGES } from '../../constants/lookups.js';
 import type { ServiceContext } from '../../types/auth.js';
-import { hasOrgScope } from '../../utils/access.js';
+import { recordScope } from '../../utils/access.js';
 import { compileFilterTree } from '../../utils/filterTree.js';
 import { resolvePeriod } from '../../utils/time.js';
 import { ActivityModel } from '../activities/activity.model.js';
@@ -164,8 +164,9 @@ export async function callAnalytics(ctx: ServiceContext, q: CallAnalyticsQuery) 
 
   // Other channels in the same period (unified communication KPIs).
   const actMatch: Filter = { organizationId: ctx.organizationId, occurredAt: { $gte: from, $lt: range.to }, type: { $in: ['whatsapp', 'email', 'meeting'] } };
-  if (!hasOrgScope(ctx)) actMatch.userId = ctx.userId;
-  if (q.counsellor) actMatch.userId = new Types.ObjectId(q.counsellor);
+  if (recordScope(ctx) !== 'organization') actMatch.userId = ctx.userId;
+  // A restricted user can't widen their view by naming another counsellor.
+  if (q.counsellor) actMatch.userId = recordScope(ctx) !== 'organization' && q.counsellor !== ctx.userId.toString() ? null : new Types.ObjectId(q.counsellor);
   const channels = await ActivityModel.aggregate<{ _id: string; count: number }>([{ $match: actMatch }, { $group: { _id: '$type', count: { $sum: 1 } } }]);
 
   const t = shape(totals);

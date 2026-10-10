@@ -47,6 +47,15 @@ const schema = z.object({
   /** Token refreshes per 15 min per refresh token. */
   REFRESH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
 
+  /** Product name shown in emails and authenticator apps (2FA issuer). */
+  APP_NAME: z.string().min(1).max(60).default('Study Abroad CRM'),
+  /**
+   * Public read-only demo: POST /auth/demo signs visitors into the demo organization without a
+   * password. Off by default; never enable it on a database that holds real customer data.
+   */
+  DEMO_ENABLED: bool.default(false),
+  /** Demo organizations reject every write from signed-in users (set false only to rehearse a demo script locally). */
+  DEMO_READ_ONLY: bool.default(true),
   /** Public URL of the web app, used to build links in emails. */
   APP_URL: z.url().default('http://localhost:3000'),
   EMAIL_PROVIDER: z.enum(['console', 'smtp', 'memory']).default('console'),
@@ -74,6 +83,20 @@ const schema = z.object({
   /** Maximum document upload size. */
   DOCUMENT_MAX_MB: z.coerce.number().int().min(1).max(100).default(10),
   SIGNED_URL_TTL_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
+
+  /**
+   * Push notifications: "live" sends via FCM (Android) and APNs (iOS) with the credentials below;
+   * "log" only logs (development). Tests always use an in-memory driver.
+   */
+  PUSH_DRIVER: z.enum(['live', 'log']).default('log'),
+  /** Firebase service-account JSON (raw or base64) for FCM HTTP v1. */
+  FCM_SERVICE_ACCOUNT: z.string().optional(),
+  /** APNs auth key (.p8 contents, raw or base64), key id, team id and the app bundle id. */
+  APNS_KEY: z.string().optional(),
+  APNS_KEY_ID: z.string().optional(),
+  APNS_TEAM_ID: z.string().optional(),
+  APNS_BUNDLE_ID: z.string().default('com.studyabroadcrm.app'),
+  APNS_PRODUCTION: z.coerce.boolean().default(false),
 
   SUPER_ADMIN_EMAIL: z.email().optional(),
   SUPER_ADMIN_PASSWORD: z.string().min(10).optional(),
